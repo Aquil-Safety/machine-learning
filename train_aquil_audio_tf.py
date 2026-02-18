@@ -1,3 +1,5 @@
+"""Training pipeline for Aquili Safety audio classification."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,7 +9,7 @@ import random
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Tuple, Optional, Iterator
+from typing import Iterator, List, Tuple
 
 import numpy as np
 
@@ -16,9 +18,7 @@ import tensorflow as tf
 
 # Audio
 import librosa
-import soundfile as sf
-
-# Metrics & splitting helpers (optional)
+# Metrics
 from sklearn.metrics import classification_report, confusion_matrix
 
 
@@ -28,6 +28,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 
 @dataclass(frozen=True)
 class TrainConfig:
+    """Immutable training configuration for model, data, and export settings."""
     # Data
     data_dir: str
     out_dir: str
@@ -86,7 +87,9 @@ AUDIO_EXTENSIONS = {".wav", ".wave", ".mp3", ".flac"}
 def list_audio_files(class_dir: Path) -> List[Path]:
     if not class_dir.exists():
         return []
-    return sorted([p for p in class_dir.rglob("*") if p.suffix.lower() in AUDIO_EXTENSIONS])
+    return sorted(
+        [p for p in class_dir.rglob("*") if p.suffix.lower() in AUDIO_EXTENSIONS]
+    )
 
 
 def human_time() -> str:
@@ -171,7 +174,10 @@ def normalize_mel(mel_db: np.ndarray) -> np.ndarray:
 def cached_feature_path(audio_path: Path, cfg: TrainConfig) -> Path:
     # Cache in a hidden file next to source audio
     # Name includes key feature settings in case you change them later.
-    key = f"sr{cfg.sample_rate}_sec{cfg.clip_seconds}_m{cfg.n_mels}_nfft{cfg.n_fft}_hop{cfg.hop_length}_f{cfg.fmin}-{cfg.fmax}"
+    key = (
+        f"sr{cfg.sample_rate}_sec{cfg.clip_seconds}_m{cfg.n_mels}_"
+        f"nfft{cfg.n_fft}_hop{cfg.hop_length}_f{cfg.fmin}-{cfg.fmax}"
+    )
     return audio_path.with_suffix(f".{key}.mel.npy")
 
 
@@ -223,9 +229,9 @@ def build_file_list(split_dir: Path) -> Tuple[List[Path], List[int]]:
     gun = list_audio_files(split_dir / "gunshot")
     neg = list_audio_files(split_dir / "not_gunshot")
 
-    X = gun + neg
+    features = gun + neg
     y = [1] * len(gun) + [0] * len(neg)
-    return X, y
+    return features, y
 
 
 def compute_class_weights(y: List[int]) -> dict:
@@ -282,12 +288,19 @@ def make_tf_dataset(
     )
 
     if shuffle:
-        ds = ds.shuffle(buffer_size=min(2000, len(paths)), seed=cfg.seed, reshuffle_each_iteration=True)
+        ds = ds.shuffle(
+            buffer_size=min(2000, len(paths)),
+            seed=cfg.seed,
+            reshuffle_each_iteration=True,
+        )
 
     ds = ds.batch(cfg.batch_size, drop_remainder=False)
 
     # Basic map to cast label to float for BCE
-    ds = ds.map(lambda x, y: (x, tf.cast(y, tf.float32)), num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.map(
+        lambda x, y: (x, tf.cast(y, tf.float32)),
+        num_parallel_calls=tf.data.AUTOTUNE,
+    )
 
     ds = ds.prefetch(cfg.prefetch)
     return ds
@@ -387,7 +400,7 @@ def export_tflite_int8(
         for xb, _ in rep_ds:
             # xb: (B, mels, t, 1)
             for i in range(xb.shape[0]):
-                yield [tf.cast(xb[i:i+1], tf.float32)]
+                yield [tf.cast(xb[i : i + 1], tf.float32)]
                 taken += 1
                 if taken >= cfg.rep_data_samples:
                     return
@@ -411,8 +424,12 @@ def export_tflite_int8(
 
 def parse_args() -> TrainConfig:
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dir", type=str, required=True, help="Path to data/ directory")
-    p.add_argument("--out_dir", type=str, default="./artifacts", help="Where to save models and logs")
+    p.add_argument(
+        "--data_dir", type=str, required=True, help="Path to data/ directory"
+    )
+    p.add_argument(
+        "--out_dir", type=str, default="./artifacts", help="Where to save models and logs"
+    )
 
     p.add_argument("--epochs", type=int, default=40)
     p.add_argument("--batch_size", type=int, default=64)
@@ -434,8 +451,8 @@ def parse_args() -> TrainConfig:
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
-        cache_features=True if args.cache_features else False,
-        export_tflite=True if args.export_tflite else False,
+        cache_features=bool(args.cache_features),
+        export_tflite=bool(args.export_tflite),
     )
 
     # allow explicit negations
@@ -469,15 +486,21 @@ def main() -> None:
             "data/train/gunshot/*.(wav|mp3|flac), data/train/not_gunshot/*.(wav|mp3|flac), etc."
         )
 
-    print(f"[{human_time()}] Train files: {len(train_paths)} (pos={sum(train_labels)}, neg={len(train_labels)-sum(train_labels)})")
-    print(f"[{human_time()}] Val files:   {len(val_paths)} (pos={sum(val_labels)}, neg={len(val_labels)-sum(val_labels)})")
+    print(
+        f"[{human_time()}] Train files: {len(train_paths)} "
+        f"(pos={sum(train_labels)}, neg={len(train_labels)-sum(train_labels)})"
+    )
+    print(
+        f"[{human_time()}] Val files:   {len(val_paths)} "
+        f"(pos={sum(val_labels)}, neg={len(val_labels)-sum(val_labels)})"
+    )
 
     # Build datasets
     train_ds = make_tf_dataset(train_paths, train_labels, cfg, augment=True, shuffle=True)
     val_ds = make_tf_dataset(val_paths, val_labels, cfg, augment=False, shuffle=False)
 
     # Determine input shape by peeking one batch
-    xb, yb = next(iter(train_ds))
+    xb, _ = next(iter(train_ds))
     input_shape = tuple(xb.shape[1:])  # (mels, t, 1)
     print(f"[{human_time()}] Input shape: {input_shape}")
 
@@ -539,7 +562,7 @@ def main() -> None:
 
     # Train
     print(f"[{human_time()}] Starting training...")
-    history = model.fit(
+    model.fit(
         train_ds,
         validation_data=val_ds,
         epochs=cfg.epochs,
@@ -571,9 +594,13 @@ def main() -> None:
     if test_dir.exists():
         test_paths, test_labels = build_file_list(test_dir)
         if len(test_paths) > 0:
-            test_ds = make_tf_dataset(test_paths, test_labels, cfg, augment=False, shuffle=False)
+            test_ds = make_tf_dataset(
+                test_paths, test_labels, cfg, augment=False, shuffle=False
+            )
             test_eval_095 = evaluate_on_dataset(model, test_ds, threshold=0.95)
-            (out_dir / "test_eval_threshold_0.95.json").write_text(json.dumps(test_eval_095, indent=2))
+            (out_dir / "test_eval_threshold_0.95.json").write_text(
+                json.dumps(test_eval_095, indent=2)
+            )
             print(f"[{human_time()}] Wrote test eval report @ threshold 0.95")
 
     # TFLite export

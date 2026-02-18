@@ -3,3 +3,5 @@ librosa
 soundfile
 numpy
 scikit-learn
+pandas
+matplotlib

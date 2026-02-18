@@ -1,4 +1,4 @@
-"""Training pipeline for Aquili Safety audio classification."""
+"""Training pipeline for Aquil Safety audio classification."""
 
 from __future__ import annotations
 
@@ -339,7 +339,7 @@ def build_small_cnn(input_shape: Tuple[int, int, int], cfg: TrainConfig) -> tf.k
     x = tf.keras.layers.Dropout(cfg.dropout)(x)
     outputs = tf.keras.layers.Dense(1, activation="sigmoid")(x)
 
-    model = tf.keras.Model(inputs, outputs, name="aquili_mel_cnn")
+    model = tf.keras.Model(inputs, outputs, name="aquil_mel_cnn")
     return model
 
 

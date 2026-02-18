@@ -1,0 +1,21 @@
+{
+  "recommended_threshold": 0.95,
+  "input_shape": [
+    40,
+    32,
+    1
+  ],
+  "feature": {
+    "type": "mel_spectrogram_db_normalized",
+    "sample_rate": 16000,
+    "clip_seconds": 1.0,
+    "n_fft": 1024,
+    "hop_length": 512,
+    "n_mels": 40,
+    "fmin": 20,
+    "fmax": 8000,
+    "db_clip_min": -80.0,
+    "db_clip_max": 0.0,
+    "norm": "(db+80)/80"
+  }
+}

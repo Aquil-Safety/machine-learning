@@ -54,7 +54,7 @@ class TrainConfig:
 
     # Performance
     num_workers: int = 4
-    cache_features: bool = True   # caches mel arrays as .npy next to wavs
+    cache_features: bool = True   # caches mel arrays as .npy next to source audio
     prefetch: int = 2
 
     # Thresholding / class imbalance
@@ -80,10 +80,13 @@ def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
-def list_wavs(class_dir: Path) -> List[Path]:
+AUDIO_EXTENSIONS = {".wav", ".wave", ".mp3", ".flac"}
+
+
+def list_audio_files(class_dir: Path) -> List[Path]:
     if not class_dir.exists():
         return []
-    return sorted([p for p in class_dir.rglob("*") if p.suffix.lower() in [".wav", ".wave"]])
+    return sorted([p for p in class_dir.rglob("*") if p.suffix.lower() in AUDIO_EXTENSIONS])
 
 
 def human_time() -> str:
@@ -165,21 +168,21 @@ def normalize_mel(mel_db: np.ndarray) -> np.ndarray:
     return mel_norm.astype(np.float32)
 
 
-def cached_feature_path(wav_path: Path, cfg: TrainConfig) -> Path:
-    # Cache in a hidden file next to wav
+def cached_feature_path(audio_path: Path, cfg: TrainConfig) -> Path:
+    # Cache in a hidden file next to source audio
     # Name includes key feature settings in case you change them later.
     key = f"sr{cfg.sample_rate}_sec{cfg.clip_seconds}_m{cfg.n_mels}_nfft{cfg.n_fft}_hop{cfg.hop_length}_f{cfg.fmin}-{cfg.fmax}"
-    return wav_path.with_suffix(f".{key}.mel.npy")
+    return audio_path.with_suffix(f".{key}.mel.npy")
 
 
-def compute_or_load_mel(wav_path: Path, cfg: TrainConfig, augment: bool) -> np.ndarray:
-    cache_path = cached_feature_path(wav_path, cfg)
+def compute_or_load_mel(audio_path: Path, cfg: TrainConfig, augment: bool) -> np.ndarray:
+    cache_path = cached_feature_path(audio_path, cfg)
     if cfg.cache_features and cache_path.exists() and not augment:
         mel = np.load(cache_path)
         return mel.astype(np.float32)
 
     target_len = int(cfg.sample_rate * cfg.clip_seconds)
-    y = load_audio_mono(str(wav_path), cfg.sample_rate)
+    y = load_audio_mono(str(audio_path), cfg.sample_rate)
     y = fix_length(y, target_len)
 
     # Augment only for training
@@ -212,13 +215,13 @@ def compute_or_load_mel(wav_path: Path, cfg: TrainConfig, augment: bool) -> np.n
 
 def build_file_list(split_dir: Path) -> Tuple[List[Path], List[int]]:
     """
-    Returns list of wav paths and labels for a given split directory.
+    Returns list of source audio paths and labels for a given split directory.
     Labels:
       gunshot      -> 1
       not_gunshot  -> 0
     """
-    gun = list_wavs(split_dir / "gunshot")
-    neg = list_wavs(split_dir / "not_gunshot")
+    gun = list_audio_files(split_dir / "gunshot")
+    neg = list_audio_files(split_dir / "not_gunshot")
 
     X = gun + neg
     y = [1] * len(gun) + [0] * len(neg)
@@ -463,7 +466,7 @@ def main() -> None:
     if len(train_paths) == 0 or len(val_paths) == 0:
         raise RuntimeError(
             "No training/validation data found. Check directory structure:\n"
-            "data/train/gunshot/*.wav, data/train/not_gunshot/*.wav, etc."
+            "data/train/gunshot/*.(wav|mp3|flac), data/train/not_gunshot/*.(wav|mp3|flac), etc."
         )
 
     print(f"[{human_time()}] Train files: {len(train_paths)} (pos={sum(train_labels)}, neg={len(train_labels)-sum(train_labels)})")
@@ -548,7 +551,7 @@ def main() -> None:
     # Save final model artifacts
     savedmodel_dir = out_dir / "saved_model"
     keras_h5 = out_dir / "model.h5"
-    model.save(savedmodel_dir)
+    model.export(savedmodel_dir)
     model.save(keras_h5)
     print(f"[{human_time()}] SavedModel -> {savedmodel_dir}")
     print(f"[{human_time()}] Keras H5  -> {keras_h5}")

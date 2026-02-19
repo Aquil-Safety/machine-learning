@@ -1,0 +1,17 @@
+{
+  "train": {
+    "gunshot": 310,
+    "not_gunshot": 620,
+    "total": 930
+  },
+  "val": {
+    "gunshot": 31,
+    "not_gunshot": 62,
+    "total": 93
+  },
+  "test": {
+    "gunshot": 32,
+    "not_gunshot": 64,
+    "total": 96
+  }
+}

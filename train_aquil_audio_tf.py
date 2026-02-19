@@ -48,10 +48,10 @@ class TrainConfig:
     epochs: int = 40
     lr: float = 1e-3
     weight_decay: float = 1e-4
-    label_smoothing: float = 0.0
+    label_smoothing: float = 0.05
 
     # Regularization
-    dropout: float = 0.25
+    dropout: float = 0.40
 
     # Performance
     num_workers: int = 4
@@ -65,6 +65,13 @@ class TrainConfig:
     export_tflite: bool = True
     export_int8: bool = True
     rep_data_samples: int = 200  # number of samples for representative dataset
+
+    # Augmentation
+    time_shift_ms: int = 120
+    spec_time_masks: int = 2
+    spec_freq_masks: int = 2
+    spec_time_mask_width: int = 12
+    spec_freq_mask_width: int = 6
 
 
 # ----------------------------
@@ -134,6 +141,27 @@ def add_noise(y: np.ndarray, noise_level: float = 0.005) -> np.ndarray:
     return np.clip(y2, -1.0, 1.0)
 
 
+def random_time_shift(y: np.ndarray, sr: int, max_shift_ms: int) -> np.ndarray:
+    """Shift waveform in time and zero-pad wrapped region."""
+    if max_shift_ms <= 0 or len(y) == 0:
+        return y
+
+    max_shift = int(sr * max_shift_ms / 1000)
+    if max_shift < 1:
+        return y
+
+    shift = np.random.randint(-max_shift, max_shift + 1)
+    if shift == 0:
+        return y
+
+    y_shifted = np.roll(y, shift)
+    if shift > 0:
+        y_shifted[:shift] = 0.0
+    else:
+        y_shifted[shift:] = 0.0
+    return y_shifted.astype(np.float32)
+
+
 def mel_spectrogram_db(
     y: np.ndarray,
     sr: int,
@@ -171,6 +199,34 @@ def normalize_mel(mel_db: np.ndarray) -> np.ndarray:
     return mel_norm.astype(np.float32)
 
 
+def spec_augment(
+    mel: np.ndarray,
+    time_masks: int,
+    freq_masks: int,
+    max_time_width: int,
+    max_freq_width: int,
+) -> np.ndarray:
+    """Apply simple SpecAugment masking on normalized mel features."""
+    augmented = mel.copy()
+    n_mels, time_steps = augmented.shape
+
+    for _ in range(max(0, time_masks)):
+        if time_steps <= 1 or max_time_width <= 0:
+            break
+        width = np.random.randint(1, min(max_time_width, time_steps) + 1)
+        start = np.random.randint(0, time_steps - width + 1)
+        augmented[:, start : start + width] = 0.0
+
+    for _ in range(max(0, freq_masks)):
+        if n_mels <= 1 or max_freq_width <= 0:
+            break
+        width = np.random.randint(1, min(max_freq_width, n_mels) + 1)
+        start = np.random.randint(0, n_mels - width + 1)
+        augmented[start : start + width, :] = 0.0
+
+    return augmented.astype(np.float32)
+
+
 def cached_feature_path(audio_path: Path, cfg: TrainConfig) -> Path:
     # Cache in a hidden file next to source audio
     # Name includes key feature settings in case you change them later.
@@ -193,9 +249,10 @@ def compute_or_load_mel(audio_path: Path, cfg: TrainConfig, augment: bool) -> np
 
     # Augment only for training
     if augment:
+        y = random_time_shift(y, cfg.sample_rate, cfg.time_shift_ms)
         y = random_gain(y)
         # light noise helps robustness; tune later
-        y = add_noise(y, noise_level=0.003)
+        y = add_noise(y, noise_level=0.005)
 
     mel_db = mel_spectrogram_db(
         y=y,
@@ -207,6 +264,14 @@ def compute_or_load_mel(audio_path: Path, cfg: TrainConfig, augment: bool) -> np
         fmax=cfg.fmax,
     )
     mel = normalize_mel(mel_db)
+    if augment:
+        mel = spec_augment(
+            mel,
+            time_masks=cfg.spec_time_masks,
+            freq_masks=cfg.spec_freq_masks,
+            max_time_width=cfg.spec_time_mask_width,
+            max_freq_width=cfg.spec_freq_mask_width,
+        )
 
     # Cache only non-augmented versions
     if cfg.cache_features and not augment:
@@ -316,26 +381,26 @@ def build_small_cnn(input_shape: Tuple[int, int, int], cfg: TrainConfig) -> tf.k
     x = inputs
 
     # Block 1
-    x = tf.keras.layers.Conv2D(16, (3, 3), padding="same", use_bias=False)(x)
+    x = tf.keras.layers.Conv2D(12, (3, 3), padding="same", use_bias=False)(x)
     x = tf.keras.layers.BatchNormalization()(x)
     x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.MaxPool2D((2, 2))(x)
     x = tf.keras.layers.Dropout(cfg.dropout)(x)
 
     # Block 2
-    x = tf.keras.layers.Conv2D(32, (3, 3), padding="same", use_bias=False)(x)
+    x = tf.keras.layers.Conv2D(24, (3, 3), padding="same", use_bias=False)(x)
     x = tf.keras.layers.BatchNormalization()(x)
     x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.MaxPool2D((2, 2))(x)
     x = tf.keras.layers.Dropout(cfg.dropout)(x)
 
     # Block 3 (small)
-    x = tf.keras.layers.Conv2D(48, (3, 3), padding="same", use_bias=False)(x)
+    x = tf.keras.layers.Conv2D(32, (3, 3), padding="same", use_bias=False)(x)
     x = tf.keras.layers.BatchNormalization()(x)
     x = tf.keras.layers.ReLU()(x)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
 
-    x = tf.keras.layers.Dense(64, activation="relu")(x)
+    x = tf.keras.layers.Dense(32, activation="relu")(x)
     x = tf.keras.layers.Dropout(cfg.dropout)(x)
     outputs = tf.keras.layers.Dense(1, activation="sigmoid")(x)
 
@@ -515,6 +580,7 @@ def main() -> None:
         tf.keras.metrics.Precision(name="precision", thresholds=0.5),
         tf.keras.metrics.Recall(name="recall", thresholds=0.5),
         tf.keras.metrics.AUC(name="auc"),
+        tf.keras.metrics.AUC(name="pr_auc", curve="PR"),
     ]
 
     model.compile(
@@ -536,24 +602,24 @@ def main() -> None:
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
             filepath=str(ckpt_path),
-            monitor="val_auc",
-            mode="max",
+            monitor="val_loss",
+            mode="min",
             save_best_only=True,
             save_weights_only=True,
             verbose=1,
         ),
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_auc",
-            mode="max",
-            patience=8,
+            monitor="val_loss",
+            mode="min",
+            patience=4,
             restore_best_weights=True,
             verbose=1,
         ),
         tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_auc",
-            mode="max",
+            monitor="val_loss",
+            mode="min",
             factor=0.5,
-            patience=3,
+            patience=2,
             min_lr=1e-6,
             verbose=1,
         ),

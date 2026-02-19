@@ -8,10 +8,12 @@
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Data Layout](#data-layout)
+- [UrbanSound8K Fold Split](#urbansound8k-fold-split)
 - [Supported Audio Formats](#supported-audio-formats)
 - [Training](#training)
 - [Output Artifacts](#output-artifacts)
 - [Plot Training Curves](#plot-training-curves)
+- [Edge-Style Local Test](#edge-style-local-test)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [Changelog](#changelog)
@@ -111,6 +113,37 @@ Notes:
 - Keep both classes present in each split.
 - Very small datasets will overfit and produce unstable metrics.
 
+## UrbanSound8K Fold Split
+
+When using UrbanSound8K only, use fold-based splitting to avoid leakage:
+
+- `train`: folds `1-8`
+- `val`: fold `9`
+- `test`: fold `10`
+
+Generate a binary dataset:
+
+```bash
+python3 prepare_urbansound8k_binary.py \
+  --urbansound_root ~/Downloads/UrbanSound8K \
+  --out_dir data_urbansound8k_binary \
+  --neg_to_pos_ratio 2.0
+```
+
+Train on it:
+
+```bash
+python3 train_aquil_audio_tf.py \
+  --data_dir ./data_urbansound8k_binary \
+  --out_dir ./artifacts_urbansound
+```
+
+Notes:
+
+- The prep script reads `metadata/UrbanSound8K.csv`.
+- Files are symlinked by default (use `--copy` to copy).
+- If a source clip is missing on disk, counts can differ by one from metadata totals.
+
 ## Supported Audio Formats
 
 `train_aquil_audio_tf.py` currently supports:
@@ -176,6 +209,39 @@ Interpretation shortcut:
 
 - Train loss down + val loss flat/up: likely overfitting
 - Both losses high/flat: likely underfitting
+
+## Edge-Style Local Test
+
+Use `edge_infer.py` to simulate sensor streaming inference from an audio file.
+
+Example with Keras model:
+
+```bash
+./venv/bin/python3 edge_infer.py \
+  --model_path artifacts_urbansound_v2/model.h5 \
+  --input_audio data_urbansound8k_binary/test/gunshot/157207-6-0-0.wav \
+  --threshold 0.95 \
+  --hop_ms 100 \
+  --vote_window 5 \
+  --vote_hits 3 \
+  --cooldown_sec 2.0 \
+  --events_json artifacts_urbansound_v2/edge_events.json
+```
+
+Example with TFLite model:
+
+```bash
+./venv/bin/python3 edge_infer.py \
+  --model_path artifacts_urbansound_v2/model_float.tflite \
+  --input_audio data_urbansound8k_binary/test/not_gunshot/101382-2-0-10.wav
+```
+
+What this simulates:
+
+- Rolling 1-second window feature extraction (same mel pipeline as training)
+- Streaming hop processing (`--hop_ms`)
+- Alert thresholding (`--threshold`)
+- Edge stabilization with `N-of-M` voting and cooldown
 
 ## Troubleshooting
 

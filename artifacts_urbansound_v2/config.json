@@ -1,6 +1,6 @@
 {
-  "data_dir": "./data_rebalanced",
-  "out_dir": "./artifacts",
+  "data_dir": "./data_urbansound8k_binary_copy",
+  "out_dir": "./artifacts_urbansound_v2",
   "seed": 42,
   "sample_rate": 16000,
   "clip_seconds": 1.0,
@@ -13,13 +13,18 @@
   "epochs": 40,
   "lr": 0.001,
   "weight_decay": 0.0001,
-  "label_smoothing": 0.0,
-  "dropout": 0.25,
+  "label_smoothing": 0.05,
+  "dropout": 0.4,
   "num_workers": 4,
   "cache_features": false,
   "prefetch": 2,
   "class_weight": true,
   "export_tflite": false,
   "export_int8": true,
-  "rep_data_samples": 200
+  "rep_data_samples": 200,
+  "time_shift_ms": 120,
+  "spec_time_masks": 2,
+  "spec_freq_masks": 2,
+  "spec_time_mask_width": 12,
+  "spec_freq_mask_width": 6
 }

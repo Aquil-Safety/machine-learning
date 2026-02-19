@@ -1,6 +1,6 @@
 {
-  "data_dir": "./data_rebalanced",
-  "out_dir": "./artifacts",
+  "data_dir": "./data_urbansound8k_binary",
+  "out_dir": "./artifacts_urbansound",
   "seed": 42,
   "sample_rate": 16000,
   "clip_seconds": 1.0,
